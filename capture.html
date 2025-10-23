@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Screen → Slides Capture</title>
+<style>
+  :root{color-scheme:dark}
+  body{font-family:system-ui,-apple-system,Segoe UI,Inter,Roboto,sans-serif;background:#0c0f13;color:#fff;margin:0}
+  .wrap{max-width:720px;margin:40px auto;padding:24px;background:#111318;border:1px solid #1e2230;border-radius:16px}
+  h1{margin:0 0 12px;font-size:22px}
+  p{color:#b8c0cc;margin:8px 0 16px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .input{padding:10px 12px;border-radius:10px;border:1px solid #2a2f40;background:#0f1117;color:#fff;width:280px}
+  .btn{padding:12px 14px;border-radius:10px;border:none;font-weight:700;cursor:pointer}
+  .start{background:#24a148;color:#fff}
+  .stop{background:#c83532;color:#fff}
+  .ghost{background:#161923;color:#e2e8f0;border:1px solid #2a2f40}
+  .status{display:flex;align-items:center;gap:8px;margin:8px 0 16px}
+  .dot{width:10px;height:10px;border-radius:50%;background:#777}
+  pre{background:#0a0c12;color:#9be3ff;padding:12px;border-radius:10px;max-height:220px;overflow:auto}
+</style>
+
+<body>
+  <div class="wrap">
+    <h1>Screen → Slides</h1>
+    <p>Click <b>Start</b>, choose a screen/window/tab, and this page will periodically send screenshots to your Slides deck.</p>
+
+    <div class="status"><div id="dot" class="dot"></div><div id="state">Idle</div></div>
+
+    <div class="row" style="margin-bottom:10px;">
+      <input id="url" class="input" placeholder="Paste your Apps Script /exec URL">
+      <input id="mins" class="input" type="number" min="0.25" step="0.25" value="2" placeholder="Interval (minutes)">
+    </div>
+
+    <div class="row" style="margin-bottom:16px;">
+      <button id="start" class="btn start">Start</button>
+      <button id="stop" class="btn stop" disabled>Stop</button>
+      <button id="status" class="btn ghost">Status</button>
+    </div>
+
+    <pre id="log">Ready.</pre>
+    <p style="font-size:12px;color:#96a0b2">Keep this tab open while capturing.</p>
+  </div>
+
+  <script>
+  (() => {
+    const $ = id => document.getElementById(id);
+    const log = m => { const ts=new Date().toLocaleTimeString(); $('log').textContent = `[${ts}] ${m}\n` + $('log').textContent; };
+    const setRun = on => { $('start').disabled=on; $('stop').disabled=!on; $('state').textContent=on?'Running':'Idle'; $('dot').style.background=on?'#24a148':'#777'; };
+
+    let track=null, timer=null, nextAt=0, sent=0, lastErr=null, intervalMs=120000, URL_EXEC='';
+
+    async function snapOnce(){
+      try{
+        if(!track || track.readyState!=='live') throw new Error('Track not live.');
+        const ic=new ImageCapture(track);
+        const bmp=await ic.grabFrame();
+        const c=Object.assign(document.createElement('canvas'),{width:bmp.width,height:bmp.height});
+        c.getContext('2d').drawImage(bmp,0,0);
+        const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',0.85));
+        const b64=await new Promise(r=>{const f=new FileReader();f.onloadend=()=>r(String(f.result).split(',')[1]);f.readAsDataURL(blob);});
+        const body=new URLSearchParams();body.set('image',b64);
+        await fetch(URL_EXEC,{method:'POST',mode:'no-cors',cache:'no-store',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body});
+        sent++;lastErr=null;log(`📸 Sent #${sent}`);
+      }catch(e){lastErr=e;log(`⚠️ ${e.message}`);if(!track||track.readyState!=='live')stop();}
+    }
+
+    async function start(){
+      try{
+        URL_EXEC = $('url').value.trim();
+        if(!/^https?:\/\//i.test(URL_EXEC)) return log('❌ Enter a valid /exec URL.');
+        intervalMs = Math.max(15000, Math.round((Number($('mins').value)||2)*60000));
+        log('🎬 Requesting screen/window/tab…');
+        const stream = await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});
+        track = stream.getVideoTracks()[0];
+        track.addEventListener('ended', stop);
+        sent=0; setRun(true);
+        await snapOnce();
+        nextAt = Date.now() + intervalMs;
+        timer = setInterval(()=>{ nextAt=Date.now()+intervalMs; snapOnce(); }, intervalMs);
+        log(`✅ Capturing every ${(intervalMs/60000).toFixed(2)} min`);
+      }catch(e){log('❌ Failed to start: '+e.message); setRun(false);}
+    }
+
+    function stop(){
+      if(timer) clearInterval(timer);
+      timer=null;
+      if(track) try{track.stop();}catch{}
+      track=null; setRun(false);
+      log(`🛑 Stopped. Total sent: ${sent}`);
+    }
+
+    function status(){
+      const s=timer?Math.max(0,Math.round((nextAt-Date.now())/1000)):'-';
+      log(`📊 Status — running: ${!!timer}, sent: ${sent}, next in: ${s}s, last error: ${lastErr?lastErr.message:'None'}`);
+    }
+
+    $('start').onclick=start;
+    $('stop').onclick=stop;
+    $('status').onclick=status;
+  })();
+  </script>
+</body>
+</html>
